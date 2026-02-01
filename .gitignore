@@ -19,10 +19,10 @@ build/
 # ===========================
 # Maven Wrapper
 # ===========================
-# Maven wrapper files - excluded because they can be regenerated
-.mvn/
-mvnw
-mvnw.cmd
+# Maven wrapper files are now INCLUDED for CI/CD consistency
+# They ensure the same Maven version is used across all environments
+# Only exclude the wrapper JAR download directory
+.mvn/wrapper/maven-wrapper.jar
 
 # ===========================
 # IDE Configuration Files
