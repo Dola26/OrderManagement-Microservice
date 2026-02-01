@@ -1,0 +1,116 @@
+# ===========================
+# Java Build Artifacts
+# ===========================
+# Compiled class files
+*.class
+
+# Package files
+*.jar
+*.war
+*.ear
+
+# Maven build output directory
+target/
+
+# Gradle build output
+build/
+.gradle/
+
+# ===========================
+# Maven Wrapper
+# ===========================
+# Maven wrapper files - excluded because they can be regenerated
+.mvn/
+mvnw
+mvnw.cmd
+
+# ===========================
+# IDE Configuration Files
+# ===========================
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# NetBeans
+nbproject/
+nbbuild/
+dist/
+nbdist/
+
+# ===========================
+# Operating System Files
+# ===========================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# ===========================
+# Environment & Configuration
+# ===========================
+# Environment variable files - may contain sensitive data
+*.env
+infrastructure-vars.env
+.env.local
+.env.*.local
+
+# Application properties with secrets
+*-secret.properties
+*-secrets.yml
+
+# ===========================
+# Logs
+# ===========================
+*.log
+logs/
+spring.log
+
+# ===========================
+# Temporary Files
+# ===========================
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# ===========================
+# Testing
+# ===========================
+# JUnit test reports
+TEST-*.xml
+
+# Code coverage reports
+.jacoco/
+jacoco.exec
+
+# ===========================
+# Spring Boot
+# ===========================
+# Spring Boot DevTools restart trigger file
+.reloadtrigger
+
+# ===========================
+# Docker & Kubernetes (for future use)
+# ===========================
+# Don't ignore kubernetes-manifests directory itself, but ignore any generated files
+# kubernetes-manifests/**/*.generated.yml
