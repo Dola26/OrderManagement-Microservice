@@ -1,0 +1,274 @@
+# ===========================================================================================
+# CI/CD Pipeline for Order Management Microservices - Week 2
+# ===========================================================================================
+# This workflow automates:
+# 1. Testing all Spring Boot microservices
+# 2. Building JAR files
+# 3. Building Docker images
+# 4. Pushing images to AWS ECR
+# ===========================================================================================
+
+name: CI/CD Pipeline
+
+# Trigger Configuration
+# WHY: Automatically run the full pipeline when code is pushed to main branch
+# This ensures the main branch always has working, tested, and deployable Docker images
+on:
+  push:
+    branches:
+      - main
+
+# Environment Variables
+# WHY: Define once, use everywhere - makes configuration changes easier
+# These are available to all jobs in the workflow
+env:
+  AWS_REGION: us-east-2
+  # ECR_REGISTRY will be set after login in each job that needs it
+
+jobs:
+  # ===========================================================================================
+  # JOB 1: TEST
+  # ===========================================================================================
+  # WHY: Run tests for all microservices to catch bugs early before building
+  # Tests are run in parallel using a matrix strategy to speed up the pipeline
+  # ===========================================================================================
+  test:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+
+    # Matrix Strategy
+    # WHY: Allows us to run the same test steps for all three services in parallel
+    # This reduces total pipeline execution time from ~15 minutes to ~5 minutes
+    strategy:
+      # WHY: fail-fast: false ensures all services are tested even if one fails
+      # This gives us complete feedback about all services in a single run
+      fail-fast: false
+      matrix:
+        service:
+          - order-service
+          - user-service
+          - notification-service
+
+    steps:
+      # Step 1: Checkout Code
+      # WHY: Downloads the repository code so we can build and test it
+      # uses v3 for stability and security updates
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Setup Java Development Kit
+      # WHY: Spring Boot 4.x requires Java 21 to compile and run
+      # Temurin is the open-source JDK distribution (formerly AdoptOpenJDK)
+      - name: Set up JDK 21
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Step 3: Cache Maven Dependencies
+      # WHY: Maven downloads many dependencies (JARs) that don't change often
+      # Caching them speeds up subsequent builds from ~5 minutes to ~30 seconds
+      # The cache key is based on pom.xml files - if they change, cache is invalidated
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          # WHY: restore-keys provides a fallback if exact match isn't found
+          # This allows partial cache hits to still speed up the build
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      # Step 4: Run Tests
+      # WHY: Execute JUnit tests to verify code correctness
+      # chmod +x ensures the Maven wrapper script has execute permissions
+      # ./mvnw test runs all tests without creating a JAR file (faster than package)
+      - name: Run tests for ${{ matrix.service }}
+        run: |
+          cd ${{ matrix.service }}
+          chmod +x mvnw
+          ./mvnw test
+
+  # ===========================================================================================
+  # JOB 2: BUILD JAR
+  # ===========================================================================================
+  # WHY: After tests pass, build the JAR files for each microservice
+  # The 'needs: test' ensures builds only run if all tests pass (quality gate)
+  # JAR files are uploaded as artifacts to be used by the Docker build job
+  # ===========================================================================================
+  build-jar:
+    name: Build JAR - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+
+    # Dependency Declaration
+    # WHY: Ensures builds only happen after all tests pass
+    # This prevents wasting resources building broken code
+    needs: test
+
+    # Matrix Strategy
+    # WHY: Build all three services in parallel for faster pipeline execution
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - order-service
+          - user-service
+          - notification-service
+
+    steps:
+      # Step 1: Checkout Code
+      # WHY: Each job runs in a fresh environment, so we need to checkout again
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Setup Java Development Kit
+      # WHY: Required to compile Java code and create executable JAR files
+      - name: Set up JDK 21
+        uses: actions/setup-java@v3
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Step 3: Cache Maven Dependencies
+      # WHY: Reuse the same dependencies cached during the test job
+      # This significantly speeds up the build process
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      # Step 4: Build JAR File
+      # WHY: Create the executable JAR file that will be packaged into Docker image
+      # 'clean' removes old build artifacts to ensure a fresh build
+      # 'package' compiles code, runs tests, and creates the JAR
+      # '-DskipTests' skips tests since we already ran them in the test job
+      - name: Build ${{ matrix.service }}
+        run: |
+          cd ${{ matrix.service }}
+          chmod +x mvnw
+          ./mvnw clean package -DskipTests
+
+      # Step 5: Upload JAR Artifact
+      # WHY: Save the JAR file so the Docker build job can download and use it
+      # This avoids rebuilding the JAR in the Docker step (saves time and ensures consistency)
+      # Artifacts are automatically deleted after 90 days to save storage
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.service }}-jar
+          path: ${{ matrix.service }}/target/*.jar
+          # WHY: Short retention since we only need it for the next job
+          retention-days: 1
+
+  # ===========================================================================================
+  # JOB 3: BUILD AND PUSH DOCKER IMAGES TO AWS ECR
+  # ===========================================================================================
+  # WHY: Package the application into Docker images and push to AWS ECR
+  # This makes the services ready for deployment to EKS/ECS
+  # Images are tagged with both the git commit SHA (immutable) and 'latest' (convenience)
+  # ===========================================================================================
+  build-and-push-docker:
+    name: Docker Build & Push - ${{ matrix.service }}
+    runs-on: ubuntu-latest
+
+    # Dependency Declaration
+    # WHY: Ensures Docker images are only built after JAR files are successfully created
+    # This maintains the quality gate: Tests → JAR Build → Docker Build
+    needs: build-jar
+
+    # Matrix Strategy
+    # WHY: Build and push all three service images in parallel
+    # This reduces deployment time from ~15 minutes to ~5 minutes
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - order-service
+          - user-service
+          - notification-service
+
+    steps:
+      # Step 1: Checkout Code
+      # WHY: Need the repository code to access Dockerfiles
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Download JAR Artifact
+      # WHY: Retrieve the JAR file built in the previous job
+      # This ensures we're using the exact same JAR that was tested
+      # Avoids rebuilding and potential inconsistencies
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ matrix.service }}-jar
+          path: ${{ matrix.service }}/target/
+
+      # Step 3: Configure AWS Credentials
+      # WHY: Authenticate with AWS to get permissions to push to ECR
+      # Uses GitHub secrets to securely store AWS credentials
+      # OIDC (OpenID Connect) would be more secure, but requires additional AWS setup
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 4: Login to Amazon ECR
+      # WHY: Authenticate Docker with ECR so we can push images
+      # This generates a temporary token (valid for 12 hours) and configures Docker
+      # The registry URL is automatically set as an output variable
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # Step 5: Set up Docker Buildx
+      # WHY: Enable advanced Docker build features including multi-platform builds
+      # Buildx is required for building linux/amd64 images on any host platform
+      # This ensures images work on AWS EKS nodes regardless of where they're built
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      # Step 6: Build and Push Docker Image
+      # WHY: Create the container image and push it to ECR
+      # Two tags are created:
+      # 1. ${{ github.sha }} - Immutable tag using git commit hash for rollbacks
+      # 2. latest - Convenience tag for development/testing
+      - name: Build and push Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          cd ${{ matrix.service }}
+
+          # WHY: Build for linux/amd64 platform to ensure compatibility with AWS EKS nodes
+          # Most EKS nodes run on x86_64 architecture
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag $ECR_REGISTRY/${{ matrix.service }}:$IMAGE_TAG \
+            --tag $ECR_REGISTRY/${{ matrix.service }}:latest \
+            --push \
+            .
+
+          echo "✅ Image pushed to ECR:"
+          echo "   $ECR_REGISTRY/${{ matrix.service }}:$IMAGE_TAG"
+          echo "   $ECR_REGISTRY/${{ matrix.service }}:latest"
+
+      # Step 7: Output Image Details
+      # WHY: Provide clear feedback about what was pushed
+      # These outputs can be used by subsequent deployment jobs if needed
+      - name: Image Details
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📦 Service: ${{ matrix.service }}"
+          echo "🏷️  Tags:"
+          echo "   - ${{ github.sha }}"
+          echo "   - latest"
+          echo "📍 Registry: $ECR_REGISTRY"
+          echo "🔗 Image URI: $ECR_REGISTRY/${{ matrix.service }}:${{ github.sha }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
